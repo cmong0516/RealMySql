@@ -312,3 +312,47 @@ from information_schma.innodb_tables it
 inner join information_schema.innodb_indexes li on li.table_id = it.table_id 
 inner join information_schema.innodb_cached_indexes ici on ici.index_id = li.index_id
 where it.name=concat('employees','\','employees');
+- MySQL 서버는 개별 인덱스별로 전체 페이지 개수가 몇개인지는 사용자에게 알려주지 않기때문에 인덱스별로 페이지가 InnoDB 버퍼 풀에 적재된 비율은 확인할수 없다.
+
+### 4.2.8 Double Write Buffer
+>- InnoDB 스토리지 엔진의 리두 로그는 리두 로그 공간 낭비를 막기 위해 페이지의 변경된 내용만 기록하는데 이로인해 변경된 더티 페이지를 디스크 파일로 플러시 할때 일부만 기록되는 문제가 발생하면 이를 복구할수 없는 파셜 페이지 , 톤 페이지 등의 문제점을 해결하기 위해 Double-Write 기법을 이용한다.
+- 실제 데이터 파일에 변경 내용을 기록하기 전에 더티 페이지를 우선 묶어서 한번의 디스크 쓰기로 시스템 테이블스페이스의 DoubleWrite 버퍼에 기록하고 InnoDB 스토리지 엔진은 각 더티 페이지를 파일의 적당한 위치에 하나씩 랜덤으로 쓰기를 실행한다.
+- DoubleWrite 버퍼 공간에 기록된 변경 내용은 실제 데이터 파일에 더티 페이지 내용을 기록하다 문제가 생길경우 사용되며 innodb_doublewrite 시스템 변수로 활성화 할수 있다.
+- HDD 는 원판이 회전하는 저장 시스템이라 여러번의 순차 디스크 쓰기가 부담되지 않지만 SSD 처럼 랜덤 IO , 순차 IO 의 비용이 비슷한 저장시스템에서는 큰 부담이 된다.
+- 데이터의 무결성이 중요한 서비스에서는 DoubleWrite 를 활성화 하는것이 좋고 성능을 위해 리두로그 동기화 설정을 1이 아닌 값으로 설정했다면 DoubleWrite 도 비활성 하는게 좋다.
+
+### 4.2.9 언두 로그
+>- InnoDB 스토리지 엔진은 트랜잭션과 격리 수준을 보장하기 위해 DML로 변경되기 이전 버전의 데이터를 별도로 백업하는데 백업된 데이터들을 언두 로그 라고 한다.
+- 트랜잭션이 롤백되면 트랜잭션 도중 변경된 데이터를 변경 전 데이터로 복구해야 하는데 이때 언두 로그에 백업해둔 이전 버전의 데이터를 이용해 복구한다.
+- 특정 커넥션에서 데이터를 변경하는 도중 다른 커넥션에서 데이터를 조회하면 트랜잭션 격리 수준에 맞게 변경중인 레코드를 읽지 않고 언두 로그에서 백업해둔 데이터를 읽어서 반환한다.
+
+#### 4.2.9.1 언두 로그 모니터링
+> 트랜잭션 A , B , C 가 순서대로 실행될때 B,C 는 완료되었지만 A 가 완료되지 않았을경우 A 트랜잭션이 완료되지 않았기 때문에 B,C 트랜잭션이 만들어낸 언두 로그는 삭제되지 않는다.
+이상태가 방치되면 InnoDB 스토리지 엔진은 A 트랜잭션이 시작된 시점부터 생성된 언두 로그를 계속 보존하게 되고 누적되어 쿼리의 성능이 떨어지게 된다.
+활성 상태의 트랜잭션이 장시간 유지되는 것은 성능상 좋지 않기때문에 show engine innodb status; 명령어를 통해 언두 로그를 모니터링 하는것이 좋다.
+
+#### 4.2.9.2 언두 테이블스페이스 관리
+> 언두 로그가 저장되는 공간을 언두 테이블스페이스 라고 하는데 언두 로그는 시스템 테이블스페이스 외부의 별도 로그파일에 기록된다.
+- 최대 동시 트랜잭션 수 = InnoDB 페이지 크기 / 16 * 롤백 세그먼트 개수 * 언두 테이블스페이스 개수
+- 8버전 이후로 create udo tablespace , drop tablespace 명렁어로 언두 테이블스페이스를 추가,삭제 할수 있게 되었다.
+- 조회 select tablespace_name , file_name
+from information_schema.files
+where file_type like 'undo log';
+- 생성 create undo tablespace extra_undo 003 add datafile '/data/undo_dir/undo_003.ibu';
+- 비활성 alter undo tablespace extra_undo_003 set inactive;
+- 삭제 drop undo tablespace extra_undo_003;
+- 언두 테이블스페이스 공간을 필요한 만큼만 남기고 남은 공간을 운영체제에 반남하는 것을 undo tablespace truncate 라고 하는데 innodb_undo_log_truncate 시스템 변수로 활성화 하여 활성화 할수 있다.
+- 언두 로그 파일을 잘라내는 작업을 수행하는 빈도는 innodb_perge_rseg_truncate_frequency 시스템 변수의 값을 조정하면 된다.
+
+### 4.2.10 체인지 버퍼
+>-  insert, update 쿼리가 실행될때 인덱스를 업데이트 하는 작업도 진행되는데 인덱스 업데이트 작업은 랜덤하게 디스크를 읽는 작업이 필요하므로 테이블에 인덱스가 많다면 이작업이 많은 자원을 소모하게 되므로 InnoDB 는 변경해야할 인덱스 페이지가 버퍼 풀에 있으면 바로 업데이트를 수행하고 그렇지 않다면 즉시 실행하지 않고 임시 공간에 저장해두고 사용자에게 결과를 반환하는 형태로 향상시키게 되는데 이때 사용하는 임시 메모리 공간을 체인지 버퍼 라고 한다.
+- 체인지 버퍼로 임시로 저장된 인덱스 레코드 조각은 이후 백그라운드 스레드에 의해 병합되는데 이 스레드를 체인지 버퍼 머지 스레드 라고 한다.
+- all : 모든 인덱스 관련 작업을 버퍼링
+- none : 버퍼링 안함
+- inserts : 인덱스에 새로운 아이템을 추가하는 작업만 버퍼링
+- deletes : 인덱스에 기존 아이템을 삭제하는 작업만 버퍼링
+- changes : 인덱스에 추가하고 삭제하는 작업만 버퍼링
+- purges : 인덱스 아이템을 영구적으로 삭제하는 작업만 버퍼링
+- 체인지 버퍼는 기본적으로 InnoDB 버퍼 풀로 설정된 메모리 공간의 25% 까찌 사용할수 있게 설정되어 있으며 최대 50% 까지 설정할수 있고 innodb_change_buffer_max_size 시스템 변수로 설정할수 있다.
+
+### 4.2.11 리두 로그 및 로그 버퍼
