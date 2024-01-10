@@ -41,4 +41,38 @@ key_block_size=8;
 - 그래서 목표 크기 (key_block_size) 의 크기가 잘못 설정되면 서버의 처리 성능이 급격히 떨어질수 있다.
 
 ### 6.2.2 KEY_BLOCK_SIZE 결정
+>- 테이블 압축에서 가장 중요한 부분은 압축된 결과가 어느 정도일지 예측하여 key_block_size 를 결정하는 것이다.
+- 우선 4KB , 8KB 로 테이블을 생성해서 샘플 데이터를 저장해 보고 적절한지 테스트 해보는것이 좋다.
+- 이때 샘플 데이터는 많으면 많을수록 정확한 테스트가 가능한데 최소 테이블의 데이터 페이지가 10개 정도 되는 테스트 데이터를 insert 해보는것이 좋다.
+1. use employees;
+(RealMySQL 책을 따라 하고 있고 예제파일을 실행했다면 employees_comp4k 테이블을 드롭했다가 실행해야 결과를 확인할수 있다.)
+2. create table employees_comp4k(
+emp_no int not null,
+birth_date date not null,
+first_name varchar(14) not null,
+last_name varchar(16) not null,
+gender enum('M','F') not null,
+hire_date date not null,
+primary key(emp_no),
+key ix_firstname (first_name),
+key ix_hiredate (hire_date)
+)row_format=compressed key_block_size=4;
+3. set global innodb_cmp_per_index_enabled=on;
+4. insert into employees_comp4k select * from employees;
+5. select table_name, index_name, compress_ops, compress_ops_ok,
+(compress_ops-compress_ops_ok)/compress_ops * 100 as compression_failure_pct
+from information_schema.innodb_cmp_per_index;
+![](https://velog.velcdn.com/images/cmong0516/post/1e450cb5-9c7b-49c7-96e7-1c5086821140/image.png)
+- 18363번 압축을 진행했고 13479번 성공했다.
+- 18363 - 13479 = 5176 번 압축했는데 압축 결과가 4KB 를 초과해서 데이터 페이지를 스플릿해서 다시 압축을 실행했다는 의미이다.
+- 압축 실패율이 27.6722 % 이며 나머지 두개의 인덱스도 압축 실패율이 상대적으로 높게 나와있는데 일반적으로 압축 실패율은 3~5% 미만으로 유지할수 있게 key_block_size 를 설정하는것이 좋다.
+
+#### key_block_size = 8
+>- key_block_size 를 8로 설정하고 동일하게 테스트를 진행해보자.
+![](https://velog.velcdn.com/images/cmong0516/post/c37a1575-5c5d-4535-b21d-829438f9aedd/image.png)
+- 8KB로 설정했는데도 primary 키의 압축 실패율이 높게 나타나는데 압축을 적용하면 압축 실패율이 높아서 InnoDB버퍼 풀에서 디스크로 기록되기 전에 압축하는 과정에서 깨 오랜 시간이 걸릴것이라고 예측할수 있다.
+- 압축 실패율은 낮으면서 압축 효율이 상대적으로 높은 8KB 를 선택하는것이 4KB 를 선택하는 것보다 효율적이다.
+- 압축 실패율이 높게 나온다고 해서 압축을 사용하지 마랑야 하는것은 아니다.
+
+### 6.2.3 압축된 페이지의 버퍼 풀 적재 및 사용
 >- 
