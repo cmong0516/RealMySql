@@ -7,3 +7,4 @@
 >[4 장 아키텍처](https://github.com/cmong0516/RealMySql/blob/master/Architecture.md)<br>
 >[5 장 트랜잭션과 락](https://github.com/cmong0516/RealMySql/blob/master/TransactionAndLock.md)<br>
 >[6 장 데이터 압축](https://github.com/cmong0516/RealMySql/blob/master/DataCompression.md)<br>
+>[7 장 데이터 암호화](https://github.com/cmong0516/RealMySql/blob/master/DataEncryption.md)<br>
